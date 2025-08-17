@@ -11,7 +11,6 @@ use strum::VariantNames;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 #[derive(Debug, Serialize, Deserialize)]
-
 /// `status_code` and `status_text` are specific to the HTTP protocol, specifically the start line of HTTP message
 /// `content_type` is used to return appropriate response to the client
 /// `message` is used to inform the user about the error, not standardized in HTTP
@@ -73,8 +72,8 @@ pub struct DatabaseConfigEntry {
     pub WAL: PathBuf,
 }
 
+// Also we are assuming that the actual path exists, because of the call to canonicalize.
 pub fn get_server_public() -> PathBuf {
-    // Also we are assuming that the actual path exists, because of the call to canonicalize.
     PathBuf::from(std::env::var("SERVER_PUBLIC").expect("SERVER_PUBLIC env not set"))
         .canonicalize()
         .expect("Server public path set in the SERVER_PUBLIC env does not exists")
@@ -562,7 +561,7 @@ impl DatabaseCollection {
         collection_path.set_extension("json");
 
         if !collection_path.starts_with(database_path) {
-            info!("Collection path: {collection_path:?} is not inside the database root: ");
+            error!("Collection path: {collection_path:?} is not inside the database root: ");
 
             return Err(Box::<dyn Error + Send + Sync>::from(HttpRequestError {
                 status_code: 400,
