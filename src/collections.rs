@@ -1,6 +1,5 @@
-use crate::{DatabaseCommand, DatabaseWAL, prelude::*};
+use crate::{DatabaseCommand, DatabaseConfigEntry, DatabaseWAL, prelude::*};
 
-use serde::{Deserialize, Serialize};
 use serde_json;
 use std::any::Any;
 use std::collections::HashMap;
@@ -9,75 +8,6 @@ use std::fmt::Debug;
 use std::path::PathBuf;
 use strum::VariantNames;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
-
-#[derive(Debug, Serialize, Deserialize)]
-/// `status_code` and `status_text` are specific to the HTTP protocol, specifically the start line of HTTP message
-/// `content_type` is used to return appropriate response to the client
-/// `message` is used to inform the user about the error, not standardized in HTTP
-pub struct HttpRequestError {
-    pub status_code: u16,
-    /// Standardized description of an error, technically should be optional.
-    /// NOTE: If we would have an enum of the status_code's we could map the status_text to each of the said status codes.
-    pub status_text: String,
-    /// Used to describe in what format the response is sent to the client.
-    pub content_type: Option<String>,
-    /// Is used to give context of an error that is sent to the client, not strictly to be displayed always.
-    /// It should not contain any sensitive information, but that is implicit as it gets redirected to the client.
-    pub message: Option<String>,
-    /// For logging purposes, used to redirect some errors to up the stack to avoid repetitive printing on server
-    /// while returning the error to the client. Should not be exposed to the client. Is skipped during serialization.
-    #[serde(skip)]
-    pub internals: Option<Box<dyn Error + Send + Sync>>,
-}
-
-impl Default for HttpRequestError {
-    fn default() -> Self {
-        Self {
-            status_code: 500,
-            status_text: String::from("Internal Server Error"),
-            content_type: Some(String::from("text/html")),
-            message: Some("An error occurred while processing a request".to_string()),
-            internals: None,
-        }
-    }
-}
-impl std::fmt::Display for HttpRequestError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "http/error: {}: {} ({})",
-            self.status_code,
-            self.status_text,
-            self.message.to_owned().unwrap_or("None".to_string())
-        )
-    }
-}
-
-impl std::error::Error for HttpRequestError {}
-
-impl From<HttpRequestError> for std::io::Error {
-    fn from(err: HttpRequestError) -> std::io::Error {
-        std::io::Error::new(std::io::ErrorKind::Other, err.to_string())
-    }
-}
-
-// `protocol` is not optional because it is required for server to work
-// and it will be set to defaults if not supplied
-#[derive(serde::Deserialize, Debug, Clone)]
-#[allow(non_snake_case)]
-pub struct DatabaseConfigEntry {
-    /// `root` directory where paths are defined, relative to the server `/public`
-    pub root: PathBuf,
-    /// `wal` file path of write-ahead log, relative to the server `/public`
-    pub WAL: PathBuf,
-}
-
-// Also we are assuming that the actual path exists, because of the call to canonicalize.
-pub fn get_server_public() -> PathBuf {
-    PathBuf::from(std::env::var("SERVER_PUBLIC").expect("SERVER_PUBLIC env not set"))
-        .canonicalize()
-        .expect("Server public path set in the SERVER_PUBLIC env does not exists")
-}
 
 /// We are using Strings as the keys to store uuids.
 type DatabaseStorage<T> = HashMap<String, T>;
@@ -181,9 +111,13 @@ impl DatabaseCollections {
 
     /// Flushes the entries found in the write-ahead log (WAL) file to the database.
     ///
-    /// That is considered the biggest performance-hit of this database, as it have to read the entire WAL file ->
-    /// deserialize each entry -> parse the collection files -> write the WAL entries to the appropriate collections ->
-    /// serialize the collections -> write the serialized collections
+    /// That is considered the biggest performance-hit of this database, because it requires:
+    /// 1. Parsing the WAL file
+    /// 2. Deserializing each buffered entry
+    /// 3. Loading the target collection files
+    /// 4. Applying the pending mutations to the collections
+    /// 5. Serializing the updated collections
+    /// 6. Writing the serialized collections back to disks
     ///
     /// Improving the performance we could store the collection in the memory, though of course, that is not possible when collections
     /// grow big, as the usually with a normal application do.
@@ -198,7 +132,10 @@ impl DatabaseCollections {
 
             drop(WAL);
 
-            self.parse_collections().await?;
+            if let Err(err) = self.parse_collections().await {
+                error!("Failed to parse collections from WAL: {}", err);
+                return Err(err);
+            }
 
             for command in commands {
                 let c = command.clone();
@@ -531,7 +468,7 @@ impl DatabaseCollection {
     /// Constructs path to database using `DatabaseEntry` enum variant which converts to string
     /// in lowercase fashion.
     ///
-    /// Does not confirm the file existence.
+    /// Return the path relative to the database.root given in the config.
     pub fn create_path(
         config: &DatabaseConfigEntry,
         collection_name: &str,
@@ -542,36 +479,20 @@ impl DatabaseCollection {
         // to link them with the names declared with the typetag::serde
 
         if !CollectionNamesFiles::VARIANTS.contains(&collection_name.to_lowercase().as_str()) {
-            return Err(Box::<dyn Error + Send + Sync>::from(HttpRequestError {
-                status_code: 400,
-                status_text: "Bad Request".into(),
-                content_type: Some("text/plain".into()),
-                internals: Some(Box::<dyn Error + Send + Sync>::from(
-                    "Collection name is not registered in the static that links the collection file names with the on given here.",
-                )),
-                ..Default::default()
-            }));
+            return Err("Collection name is not registered in the static that links the collection file names with the on given here.".into());
         }
 
         let database_root = &config.root;
         // let database_path = Config::get_server_public().join(database_root);
-        let database_path = get_server_public().join(database_root);
+        // let database_path = get_server_public().join(database_root);
 
-        let mut collection_path = database_path.join(collection_name.to_string().to_lowercase());
+        let mut collection_path = database_root.join(collection_name.to_string().to_lowercase());
         collection_path.set_extension("json");
 
-        if !collection_path.starts_with(database_path) {
-            error!("Collection path: {collection_path:?} is not inside the database root: ");
+        println!("Collection path: {}", collection_path.display());
 
-            return Err(Box::<dyn Error + Send + Sync>::from(HttpRequestError {
-                status_code: 400,
-                status_text: "Bad Request".into(),
-                message: Some("Invalid database path".to_string()),
-                internals: Some(Box::<dyn Error + Send + Sync>::from(
-                    "Collection path is not inside the database root.",
-                )),
-                content_type: Some("text/plain".to_string()),
-            }));
+        if !collection_path.starts_with(database_root) {
+            return Err("Collection path is not inside the database root".into());
         }
 
         return Ok(collection_path);

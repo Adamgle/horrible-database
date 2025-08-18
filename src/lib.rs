@@ -45,18 +45,14 @@ pub mod collections;
 pub mod prelude;
 
 pub use crate::collections::DatabaseEntryTrait;
-use crate::collections::{
-    CollectionNamesFiles, DatabaseCollections, DatabaseConfigEntry, HttpRequestError,
-};
-
-// use crate::config::config_file::DatabaseConfigEntry;
-// use crate::http::HttpRequestError;
+use crate::collections::{CollectionNamesFiles, DatabaseCollections};
 
 use crate::prelude::*;
 
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::Debug;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use strum::VariantNames;
@@ -65,6 +61,15 @@ use tokio::{
     fs::File,
     io::{AsyncSeekExt, AsyncWriteExt},
 };
+
+#[derive(serde::Deserialize, Debug, Clone)]
+#[allow(non_snake_case)]
+pub struct DatabaseConfigEntry {
+    /// `root` directory where paths are defined, relative to the server `/public`
+    pub root: PathBuf,
+    /// `wal` file path of write-ahead log, relative to the server `/public`
+    pub WAL: PathBuf,
+}
 
 #[derive(Debug)]
 pub struct Database {
@@ -254,15 +259,7 @@ impl DatabaseWAL {
         collection_name: String,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if !CollectionNamesFiles::VARIANTS.contains(&collection_name.to_lowercase().as_str()) {
-            return Err(Box::<dyn Error + Send + Sync>::from(HttpRequestError {
-                status_code: 500,
-                status_text: "Internal Server Error".into(),
-                content_type: Some("text/plain".into()),
-                internals: Some(Box::<dyn Error + Send + Sync>::from(format!(
-                    "Collection name given in the typetag::serde(name = T) does not exist in the enum; {collection_name} not found as the enum variant",
-                ))),
-                ..Default::default()
-            }));
+            return Err(format!("Collection name given in the typetag::serde(name = T) does not exist in the enum; {collection_name} not found as the enum variant").into());
         }
 
         self.collection_names.insert(collection_name.to_lowercase());
