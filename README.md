@@ -42,6 +42,9 @@ Not suitable for real-world use — meant for learning and experimentation
 
 This project is for educational purposes only. I would not recommend it to anyone. For real-world applications, use a proper database that does not offer O(n) worst-case time complexity on SELECTs.
 
+Benchmarking charts was created on top of the HTTP server that I have created so it does have to account for the HTTP message parsing, and so on.
+It would be a little better if isolated.
+
 ## License
 
 MIT

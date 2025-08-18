@@ -1,0 +1,2 @@
+Benchmarking charts was created on top of the HTTP server that I have created so it does have to account for the HTTP message parsing, and so on.
+It would be a little better if isolated.
