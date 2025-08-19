@@ -24,6 +24,8 @@ O(1) operations that mutate the state of the database. This approach also saves 
 - Data has to be fully brought into memory when flushing the Write-Ahead Log (freed afterwards), not indexing and pagination.
 - When collections grow large, it is not possible to serve data in a reasonable time
 - For operations like SELECTs, it has to flush the buffered commands in the WAL, which requires deserializing the collection, making SELECTs an absolute disaster in time complexity
+- No limits on collection entry size, which can cause memory exhaustion when entries don't fit in RAM — streaming or buffering techniques should be implemented to handle large entries gracefully
+- Async/futures uses seem not be so used reliably, the performance might degrade probably becasue of incorrect useage of those.
 
 ## How could we improve it?
 
@@ -40,7 +42,7 @@ Not suitable for real-world use — meant for learning and experimentation
 
 ## Disclaimer
 
-This project is for educational purposes only. I would not recommend it to anyone. For real-world applications, use a proper database that does not offer O(n) worst-case time complexity on SELECTs.
+This project is for educational purposes only. I would not recommend it to anyone. For real-world applications, use a proper database that does not offer O(n) worst-case time complexity on SELECTs based on the primary key.
 
 Benchmarking charts was created on top of the HTTP server that I have created so it does have to account for the HTTP message parsing, and so on.
 It would be a little better if isolated.

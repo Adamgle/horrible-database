@@ -489,8 +489,6 @@ impl DatabaseCollection {
         let mut collection_path = database_root.join(collection_name.to_string().to_lowercase());
         collection_path.set_extension("json");
 
-        println!("Collection path: {}", collection_path.display());
-
         if !collection_path.starts_with(database_root) {
             return Err("Collection path is not inside the database root".into());
         }
